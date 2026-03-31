@@ -1,0 +1,32 @@
+# Prevent direct access to .htaccess and other sensitive files
+<FilesMatch "^\.ht">
+    Deny from all
+</FilesMatch>
+
+# Disable directory listing for tile-cache
+Options -Indexes
+
+# Path-based tile serving: tiles/<layer>/<z>/<col>/<row>.png
+# If the cached file exists on disk, serve it directly (~2-5ms, no PHP).
+# If not, fall through to TileProxy.php which fetches from upstream.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Check if the tile exists in cache — serve directly, skip PHP
+    RewriteCond %{REQUEST_URI} ^(.*/)tiles/([^/]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png$
+    RewriteCond %1tile-cache/%2/%3/%4/%5.png -f
+    RewriteRule ^tiles/([^/]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png$ tile-cache/$1/$2/$3/$4.png [L]
+
+    # Cache miss — route to TileProxy.php with path params
+    RewriteRule ^tiles/([^/]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png$ TileProxy.php?layer=$1&z=$2&col=$3&row=$4 [L,QSA]
+</IfModule>
+
+# Cache headers for tiles served directly by Apache
+<IfModule mod_headers.c>
+  <FilesMatch "tile-cache/.+\.png$">
+    Header set Cache-Control "public, max-age=86400, immutable"
+    Header set X-Tile-Cache "hit-apache"
+    Header set X-Content-Type-Options "nosniff"
+  </FilesMatch>
+</IfModule>
+

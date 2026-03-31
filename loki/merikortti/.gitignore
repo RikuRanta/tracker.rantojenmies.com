@@ -1,0 +1,5 @@
+# Cached tiles (production only, not tracked in git)
+tile-cache/**/*.png
+tile-cache/**/*.jpg
+tile-cache/**/*.jpeg
+tile-cache/**/*.tmp.*

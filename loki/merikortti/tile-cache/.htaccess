@@ -1,0 +1,36 @@
+# Tile cache directory: serve files directly via Apache (fastest path, ~5-15ms).
+# Do NOT route cached PNG/JPG files back through PHP TileProxy.php.
+
+Options -Indexes
+
+# Critical: Images go directly to Apache without PHP routing.
+# This is the primary optimization for cache-hit performance (~20x faster than PHP).
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  
+  # For any PNG/JPG request that exists on disk, serve it directly (don't rewrite back to PHP).
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteCond %{REQUEST_FILENAME} \.(png|jpg|jpeg)$
+  RewriteRule ^ - [L]
+</IfModule>
+
+# Aggressive cache headers for direct Apache tile responses.
+# Caches are 180 days old on disk (TTL), browsers see 24h (Cache-Control).
+<FilesMatch "\.(png|jpg|jpeg)$">
+  <IfModule mod_headers.c>
+    Header set Cache-Control "public, max-age=86400, immutable"
+    Header set X-Tile-Cache "hit-apache"
+    Header set X-Content-Type-Options "nosniff"
+    Header set Vary "Accept-Encoding"
+  </IfModule>
+  <IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresDefault "access plus 1 day"
+  </IfModule>
+</FilesMatch>
+
+# Deny temp cache files for security.
+<FilesMatch "\.tmp\.">
+  Deny from all
+</FilesMatch>
+

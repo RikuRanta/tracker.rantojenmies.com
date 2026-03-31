@@ -1,0 +1,14 @@
+# OS
+.DS_Store
+
+# Logs
+log/*.log
+
+# Cached tiles (production data)
+loki/merikortti/tile-cache/**/*.png
+loki/merikortti/tile-cache/**/*.jpg
+loki/merikortti/tile-cache/**/*.jpeg
+loki/merikortti/tile-cache/**/*.tmp.*
+
+# Archives
+*.zip

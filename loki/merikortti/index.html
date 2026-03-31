@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Karttaselain by Rantojenmies</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.6.1/ol.css">
+  <link rel="stylesheet" href="/loki/merikortti/styles_v2.css">
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="status" class="status">Ladataan karttaa...</div>
+  <div id="zoomIndicator" class="zoom-indicator">z –</div>
+
+  <div class="route-panel">
+    <button id="routePanelCollapseToggle" class="route-panel-collapse-toggle" type="button" aria-expanded="true">Piilota</button>
+    <button id="routePlanToggle" class="route-plan-toggle" type="button">Aloita reittisuunnittelu</button>
+    <div id="routeDistance" class="route-distance">Reitti: 0.00 nm</div>
+    <button id="routeUnitToggle" class="route-unit-toggle" type="button">Yksikkö: nm</button>
+    <button id="routeClearBtn" class="route-clear-btn" type="button" hidden>Tyhjennä</button>
+  </div>
+
+  <div id="maskAreaPanel" class="mask-area-panel" hidden>
+    <div class="mask-panel-header">Kartta-aluiden maskit</div>
+    <button id="maskModeToggle" class="mask-mode-toggle" type="button">Tila: muokkaus</button>
+    <button id="maskAreaToggle" class="mask-area-toggle" type="button">Aloita piirto</button>
+    <button id="maskAreaSave" class="mask-area-save" type="button">Lataa tiedosto</button>
+    <div id="maskAreasList" class="mask-areas-list"></div>
+  </div>
+
+  <div class="attrib">
+    Lähde: Liikenne- ja viestintävirasto Traficom + Sjofartsverket + Esri World Topographic Map. Ei navigointikäyttöön. Tarkista oman käyttötapauksesi lisenssiehdot ennen tuotantokäyttöä.
+  </div>
+
+  <script src="/loki/merikortti/masks-data.js"></script>
+
+  <script>
+    const ts = Date.now();
+    const script = document.createElement('script');
+    script.type = 'module';
+    script.src = `/loki/merikortti/app.js?ts=${ts}`;
+    document.body.appendChild(script);
+  </script>
+</body>
+</html>
