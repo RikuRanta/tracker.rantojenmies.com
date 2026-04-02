@@ -1687,7 +1687,7 @@ function createMap(centerLonLat, zoom) {
       projection: PROJECTION_CODE,
       center: fromLonLat(centerLonLat, PROJECTION_CODE),
       zoom,
-      maxZoom: 18
+      maxZoom: 15
     })
   });
   map.getViewport().style.backgroundColor = '#ffffff';

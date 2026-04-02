@@ -79,7 +79,7 @@ class TrackerAPI extends API {
 		
 		parent::__construct($request);
 				
-		if (isset($this->endpoint) && $this->endpoint != 'cache' && $this->endpoint != 'guid') {
+		if (isset($this->endpoint) && $this->endpoint != 'cache') {
 		
 			if (!array_key_exists('X-Api-Token', $this->headers)) { 
 				throw new Exception('No API token provided', 401); 
@@ -132,38 +132,6 @@ class TrackerAPI extends API {
 
 	
 	/**
-	 * Endpoint: guid
-	 * 
-	 */
-
-	protected function guid() {
-		
-		/** Tietojen haku (GET) */
-		if ($this->method == 'GET') {
-			
-			mt_srand((double)microtime()*10000);//optional for php 4.2.0 and up.
-			$charid = strtoupper(md5(uniqid(rand(), true)));
-			$hyphen = chr(45);// "-"
-			$uuid = chr(123)// "{"
-				.substr($charid, 0, 8).$hyphen
-				.substr($charid, 8, 4).$hyphen
-				.substr($charid,12, 4).$hyphen
-				.substr($charid,16, 4).$hyphen
-				.substr($charid,20,12)
-				.chr(125);// "}"			
-			
-			$output['guid'] = strtolower($uuid);
-		}	
-		else { 
-			throw new Exception('Only accepts GET requests', 405); 
-		}
-
-		return $output;
-	}
-
-	
-	
-	/**
 	 * Endpoint: path
 	 * 
 	 */
@@ -178,7 +146,7 @@ class TrackerAPI extends API {
 						
 			if ($this->verb) {
 			
-				switch ($this->verb) {
+					switch ($this->verb) {
 							
 					/** 
 					 * GET:/path/list
@@ -194,14 +162,6 @@ class TrackerAPI extends API {
 					 */
 					case 'live-status':
 						$output = $path->GetLastPositionUrl($this->imei, $this->uri);
-					break;
-
-					/** 
-					 * GET:/path/unfinished
-					 * Palauttaa keskeneräiset matkat
-					 */
-					case 'unfinished':
-						$output = $path->GetUnfinished();
 					break;
 
 					/**
@@ -226,6 +186,10 @@ class TrackerAPI extends API {
 							throw new Exception('Provided path id is wrong type. Expecting numeric.', 400);
 						}
 						$output = $path->ListEditablePoints($this->imei, $editPathId);
+					break;
+
+					default:
+						throw new Exception('Unknown path verb', 400);
 					break;
 					
 				}
@@ -375,15 +339,6 @@ class TrackerAPI extends API {
 				switch ($this->verb) {
 							
 					/** 
-					 * POST:/place/generate-kml
-					 * Muodostetaan kml-aineisto uudestaan
-					 */
-					case 'generate-kml':
-						$output['result'] = $this->place_Id ? $place->GenerateKml($this->place_Id) : $place->RedoKml($this->imei);
-					break;
-
-					
-					/** 
 					 * POST:/place/generate-summary-kml
 					 * Muodostetaan kml-aineisto kaikista kohteista
 					 */
@@ -445,6 +400,10 @@ class TrackerAPI extends API {
 						$output = $events->ListEvents($this->imei, $this->uri);
 					break;	
 
+					default:
+						throw new Exception('Unknown events verb', 400);
+					break;
+
 					}
 				
 			}
@@ -459,43 +418,6 @@ class TrackerAPI extends API {
 			}
 			
 		}	
-		
-		/** Tietojen muutokset (POST) */
-		else if ($this->method == 'POST') {
-
-			if ($this->verb) {
-			
-				switch ($this->verb) {
-							
-					/** 
-					 * POST:/events/generate-kml
-					 * Muodostetaan kml-aineistot uudestaan
-					 */
-					case 'generate-kml':
-						$output['result'] = $events->RedoKml($this->imei);
-					break;
-
-					
-					/** 
-					 * POST:/events/generate-summary-kml
-					 * Muodostetaan kml-aineisto kaikista kohteista
-					 */
-					case 'generate-summary-kml':
-						$output['result'] = $events->GenerateSummaryKml($this->imei);
-					break;
-					
-					/**
-					 * POST:/events/<name-url>
-					 * Ei käytössä
-					 */
-				}
-								
-			}
-			else {
-				throw new Exception('Verb missing', 400); 
-			}
-					
-		}
 		
 		else { 
 			throw new Exception('Unsupported method', 405); 
@@ -604,57 +526,6 @@ class TrackerAPI extends API {
 		return $output;
 	}
 	
-	
-
-	/**
-	 * Endpoint: data
-	 * 
-	 */
-
-	protected function data() {
-		
-		$data = new Data();
-				
-		/** Tietojen muutokset (POST) */
-		if ($this->method == 'POST') {
-
-			if ($this->verb) {
-			
-				switch ($this->verb) {
-							
-					/** 
-					 * POST:/data/process-data
-					 * Prosessoidaan tiedot (data-taulu) 
-					 */
-					case 'process-data':
-						$output = $data->ProcessData($this->testmode);
-					break;
-					
-					/** 
-					 * POST:/data/process-staging
-					 * Prosessoidaan tiedot (staging-taulu)
-					 */
-					case 'process-staging':
-						$output = $data->ProcessStaging($this->testmode);
-					break;
-					
-					
-				}
-				
-				
-			}
-			else {
-				throw new Exception('Verb missing', 400); 
-			}
-					
-		}	
-		
-		else { 
-			throw new Exception('Unsupported method', 405); 
-		}
-
-		return $output;
-	}	
 	
  }
 ?>
