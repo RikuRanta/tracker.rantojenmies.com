@@ -22,7 +22,7 @@
  * Allowed upstream: only julkinen.traficom.fi (strict allowlist)
  */
 
-define('TILE_PROXY_OFFLINE', true);       // true = serve only cached tiles, never contact upstream
+define('TILE_PROXY_OFFLINE', false);       // true = serve only cached tiles, never contact upstream
 define('TILE_PROXY_ALLOWED_HOST', 'julkinen.traficom.fi');
 define('TILE_PROXY_CONNECT_TIMEOUT', 1);  // Fail fast during upstream outages
 define('TILE_PROXY_TIMEOUT', 2);          // Keep worker slots free under load
@@ -50,6 +50,41 @@ function sanitize_layer_name($name) {
 }
 
 /**
+ * Convert proxy path slug to canonical Traficom WMTS layer identifier.
+ */
+function resolve_wmts_layer_name($layerSlug) {
+	$knownLayers = [
+		'traficom_merikarttasarjat_public' => 'Traficom:Merikarttasarjat public',
+		'traficom_rannikkokartat_public' => 'Traficom:Rannikkokartat public',
+		'traficom_veneilykartat_public' => 'Traficom:Veneilykartat public',
+		'traficom_yleiskartat_100k_public' => 'Traficom:Yleiskartat 100k public',
+		'traficom_yleiskartat_250k_public' => 'Traficom:Yleiskartat 250k public',
+		'traficom_satamakartat' => 'Traficom:Satamakartat',
+	];
+
+	if (isset($knownLayers[$layerSlug])) {
+		return $knownLayers[$layerSlug];
+	}
+
+	if (preg_match('/^traficom_merikarttasarja_([a-z])(_public|_erikoiskartat)?$/', $layerSlug, $matches)) {
+		$series = strtoupper($matches[1]);
+		$suffix = isset($matches[2]) ? $matches[2] : '';
+
+		if ($suffix === '_public') {
+			return 'Traficom:Merikarttasarja ' . $series . ' public';
+		}
+		if ($suffix === '_erikoiskartat') {
+			return 'Traficom:Merikarttasarja ' . $series . ' erikoiskartat';
+		}
+
+		return 'Traficom:Merikarttasarja ' . $series;
+	}
+
+	// Fallback for unknown slugs.
+	return $layerSlug;
+}
+
+/**
  * Get system CA bundle path (cached per process to avoid repeated file_exists checks).
  */
 function get_ca_bundle_path() {
@@ -74,121 +109,45 @@ function get_ca_bundle_path() {
 	return $caBundle = false;
 }
 
-/**
- * Parse WMTS query params to extract layer, zoom, col, row.
- * Returns array with keys: layer, zoom, col, row (or null on parse error).
- */
-function parse_wmts_params($url) {
-	$parsed = parse_url($url);
-	if (!isset($parsed['query'])) return null;
-	
-	parse_str($parsed['query'], $params);
-
-	// Normalize key casing because upstream/client may use different conventions
-	// (e.g. LAYER vs layer, TILEMATRIX vs TileMatrix).
-	$normalized = [];
-	foreach ($params as $key => $value) {
-		$normalized[strtolower($key)] = $value;
-	}
-	
-	$layer = isset($normalized['layer']) ? $normalized['layer'] : null;
-	$matrixId = isset($normalized['tilematrix']) ? $normalized['tilematrix'] : null;
-	$col = isset($normalized['tilecol']) ? $normalized['tilecol'] : null;
-	$row = isset($normalized['tilerow']) ? $normalized['tilerow'] : null;
-	
-	if (!$layer || !$matrixId || !$col || !$row) return null;
-	
-	// Extract zoom from matrix ID (e.g., "WGS84_Pseudo-Mercator:9" -> 9)
-	$parts = explode(':', $matrixId);
-	$zoom = end($parts);
-	
-	if (!is_numeric($col) || !is_numeric($row) || !is_numeric($zoom)) return null;
-	
-	return [
-		'layer' => sanitize_layer_name($layer),
-		'zoom' => (int)$zoom,
-		'col' => (int)$col,
-		'row' => (int)$row,
-	];
-}
-
 /* ── Input validation ──────────────────────────────────────────────────── */
 
 $requestStartTime = microtime(true);
 
-// Support two request modes:
-// 1. Path-based: TileProxy.php?layer=...&z=...&col=...&row=... (from Apache rewrite, cache misses)
-// 2. Legacy URL-based: TileProxy.php?url=... (direct calls from frontend)
-$pathMode = isset($_GET['layer']) && isset($_GET['z']) && isset($_GET['col']) && isset($_GET['row']);
+$layer = isset($_GET['layer']) ? $_GET['layer'] : null;
+$z = isset($_GET['z']) ? $_GET['z'] : null;
+$col = isset($_GET['col']) ? $_GET['col'] : null;
+$row = isset($_GET['row']) ? $_GET['row'] : null;
 
-if ($pathMode) {
-	$layer = $_GET['layer'];
-	$z = $_GET['z'];
-	$col = $_GET['col'];
-	$row = $_GET['row'];
-
-	if (!preg_match('/^[a-z0-9_-]+$/', $layer) || !is_numeric($z) || !is_numeric($col) || !is_numeric($row)) {
-		http_response_code(400);
-		exit('Invalid tile parameters.');
-	}
-
-	$wmtsParams = [
-		'layer' => $layer,
-		'zoom' => (int)$z,
-		'col' => (int)$col,
-		'row' => (int)$row,
-	];
-
-	// Build upstream URL from path params
-	$tileUrl = 'https://' . TILE_PROXY_ALLOWED_HOST . '/rasteripalvelu/wmts'
-		. '?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0'
-		. '&LAYER=' . urlencode($layer)
-		. '&STYLE=default&FORMAT=image%2Fpng'
-		. '&TILEMATRIXSET=WGS84_Pseudo-Mercator'
-		. '&TILEMATRIX=WGS84_Pseudo-Mercator%3A' . $z
-		. '&TILEROW=' . $row
-		. '&TILECOL=' . $col;
-} else {
-	$raw = isset($_GET['url']) ? $_GET['url'] : '';
-	if ($raw === '') {
-		http_response_code(400);
-		exit('Missing url parameter.');
-	}
-
-	$tileUrl = filter_var($raw, FILTER_VALIDATE_URL);
-	if ($tileUrl === false) {
-		http_response_code(400);
-		exit('Invalid url parameter.');
-	}
-
-	$parsed = parse_url($tileUrl);
-	if (!$parsed ||
-		!isset($parsed['scheme']) ||
-		strtolower($parsed['scheme']) !== 'https' ||
-		!isset($parsed['host']) ||
-		strtolower($parsed['host']) !== TILE_PROXY_ALLOWED_HOST
-	) {
-		http_response_code(403);
-		exit('URL not allowed.');
-	}
-
-	$wmtsParams = parse_wmts_params($tileUrl);
+if (!preg_match('/^[a-z0-9_-]+$/', (string)$layer) || !is_numeric($z) || !is_numeric($col) || !is_numeric($row)) {
+	http_response_code(400);
+	exit('Invalid tile parameters.');
 }
+
+$wmtsParams = [
+	'layer' => $layer,
+	'zoom' => (int)$z,
+	'col' => (int)$col,
+	'row' => (int)$row,
+];
+
+$upstreamLayer = resolve_wmts_layer_name($layer);
+
+// Build upstream URL from path params
+$tileUrl = 'https://' . TILE_PROXY_ALLOWED_HOST . '/rasteripalvelu/wmts'
+	. '?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0'
+	. '&LAYER=' . urlencode($upstreamLayer)
+	. '&STYLE=default&FORMAT=image%2Fpng'
+	. '&TILEMATRIXSET=WGS84_Pseudo-Mercator'
+	. '&TILEMATRIX=WGS84_Pseudo-Mercator%3A' . $z
+	. '&TILEROW=' . $row
+	. '&TILECOL=' . $col;
 
 /* ── Cache lookup (URL-derived path structure) ──────────────────────────── */
 
-$wmtsParams = parse_wmts_params($tileUrl);
-if (!$wmtsParams) {
-	// Fallback to hash-based cache for invalid/unparseable URLs
-	$cacheDir = TILE_CACHE_DIR . '/fallback';
-	$hash = hash('sha256', $tileUrl);
-	$cacheData = $cacheDir . '/' . $hash . '.png';
-} else {
-	// Use WMTS params as cache path: tile-cache/<layer>/<zoom>/<col>/<row>.png
-	$cacheDir = TILE_CACHE_DIR . '/' . $wmtsParams['layer'] . '/' . 
-		$wmtsParams['zoom'] . '/' . $wmtsParams['col'];
-	$cacheData = $cacheDir . '/' . $wmtsParams['row'] . '.png';
-}
+// Use WMTS params as cache path: tile-cache/<layer>/<zoom>/<col>/<row>.png
+$cacheDir = TILE_CACHE_DIR . '/' . $wmtsParams['layer'] . '/' . 
+	$wmtsParams['zoom'] . '/' . $wmtsParams['col'];
+$cacheData = $cacheDir . '/' . $wmtsParams['row'] . '.png';
 
 // Cache-first strategy: serve any cached tile immediately regardless of age.
 // Nautical charts rarely change — a cached tile is always better than a 2s timeout.

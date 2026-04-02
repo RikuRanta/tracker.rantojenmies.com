@@ -54,7 +54,7 @@ const GEO_ZOOM = 12;
 const ENABLE_TILE_PROXY_DEBUG = true;
 const ENABLE_TRAFFICOM_MASKS = true;
 const FORCE_PROXY_XYZ_FALLBACK = false;
-const KEEP_BASEMAP_VISIBLE_DURING_OUTAGE = true;
+const KEEP_BASEMAP_VISIBLE_DURING_OUTAGE = false;
 const TRAFICOM_FAILURE_THRESHOLD = 8;
 const TRAFICOM_COOLDOWN_MS = 120000;
 const ENABLE_MASK_EDIT_UI = false; // Toggle for showing mask editing UI. The core mask functionality works regardless of this.
@@ -1473,7 +1473,7 @@ function createBalticBackgroundLayers() {
     }),
     zIndex: -30,
     opacity: 1,
-    visible: true
+    visible: false
   });
 
   const countryLayers = COUNTRY_PROVIDERS.map(provider => {
@@ -2200,10 +2200,9 @@ async function start() {
         return;
       }
 
-      const showOverview = false;
-      const showDetail =
-        currentZoom >= TRAFICOM_MIN_ZOOM &&
-        (currentZoom < TRAFICOM_EXTRA_DETAIL_MIN_ZOOM || !extraDetailLayer);
+      const hasWideOverviewLayer = Boolean(traficomWideOverviewLayer);
+      const showOverview = hasWideOverviewLayer && currentZoom >= TRAFICOM_MIN_ZOOM;
+      const showDetail = hasWideOverviewLayer ? currentZoom >= TRAFICOM_DETAIL_MIN_ZOOM : currentZoom >= TRAFICOM_MIN_ZOOM;
       const showExtraDetail = Boolean(extraDetailLayer) && currentZoom >= TRAFICOM_EXTRA_DETAIL_MIN_ZOOM;
 
       if (traficomWideOverviewLayer) {

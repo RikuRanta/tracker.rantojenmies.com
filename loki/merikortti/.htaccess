@@ -12,10 +12,10 @@ Options -Indexes
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # Check if the tile exists in cache — serve directly, skip PHP
-    RewriteCond %{REQUEST_URI} ^(.*/)tiles/([^/]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png$
-    RewriteCond %1tile-cache/%2/%3/%4/%5.png -f
-    RewriteRule ^tiles/([^/]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png$ tile-cache/$1/$2/$3/$4.png [L]
+    # Check if the tile exists in cache on filesystem — serve directly, skip PHP.
+    # Use absolute path to avoid DOCUMENT_ROOT/vhost path ambiguity.
+    RewriteCond /var/www/tracker.rantojenmies.com/loki/merikortti/tile-cache/$1/$2/$3/$4.png -f
+    RewriteRule ^tiles/([^/]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png$ tile-cache/$1/$2/$3/$4.png [E=TILE_CACHE_HIT_APACHE:1,L]
 
     # Cache miss — route to TileProxy.php with path params
     RewriteRule ^tiles/([^/]+)/([0-9]+)/([0-9]+)/([0-9]+)\.png$ TileProxy.php?layer=$1&z=$2&col=$3&row=$4 [L,QSA]
@@ -23,6 +23,10 @@ Options -Indexes
 
 # Cache headers for tiles served directly by Apache
 <IfModule mod_headers.c>
+  Header set Cache-Control "public, max-age=86400, immutable" env=TILE_CACHE_HIT_APACHE
+  Header set X-Tile-Cache "hit-apache" env=TILE_CACHE_HIT_APACHE
+  Header set X-Content-Type-Options "nosniff" env=TILE_CACHE_HIT_APACHE
+
   <FilesMatch "tile-cache/.+\.png$">
     Header set Cache-Control "public, max-age=86400, immutable"
     Header set X-Tile-Cache "hit-apache"
