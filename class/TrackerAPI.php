@@ -203,6 +203,30 @@ class TrackerAPI extends API {
 					case 'unfinished':
 						$output = $path->GetUnfinished();
 					break;
+
+					/**
+					 * GET:/path/manual-points/<path-id>
+					 * Listataan reitin manuaaliset pisteet
+					 */
+					case 'manual-points':
+						$manualPathId = isset($this->args[0]) ? $this->args[0] : $this->path_Id;
+						if (!is_numeric($manualPathId)) {
+							throw new Exception('Provided path id is wrong type. Expecting numeric.', 400);
+						}
+						$output = $path->ListManualPoints($this->imei, $manualPathId);
+					break;
+
+					/**
+					 * GET:/path/edit-points/<path-id>
+					 * Listataan muokattavat reittipisteet
+					 */
+					case 'edit-points':
+						$editPathId = isset($this->args[0]) ? $this->args[0] : $this->path_Id;
+						if (!is_numeric($editPathId)) {
+							throw new Exception('Provided path id is wrong type. Expecting numeric.', 400);
+						}
+						$output = $path->ListEditablePoints($this->imei, $editPathId);
+					break;
 					
 				}
 				
@@ -240,6 +264,30 @@ class TrackerAPI extends API {
 					 */
 					case 'generate-group-kml':
 						$output['result'] = $path->RedoGroupKml($this->imei, null, $this->path_Id);
+					break;
+
+					/**
+					 * POST:/path/manual-point
+					 * Lisää manuaalinen reittipiste
+					 */
+					case 'manual-point':
+						$output['result'] = $path->AddManualPoint($this->imei, $this->path_Id, $this->file);
+					break;
+
+					/**
+					 * POST:/path/manual-point-delete
+					 * Poistaa manuaalisen reittipisteen
+					 */
+					case 'manual-point-delete':
+						$output['result'] = $path->DeleteManualPoint($this->imei, $this->path_Id, $this->file);
+					break;
+
+					/**
+					 * POST:/path/edit-point
+					 * Päivitä yksittäisen reittipisteen sijainti
+					 */
+					case 'edit-point':
+						$output['result'] = $path->UpdateEditablePoint($this->imei, $this->path_Id, $this->file);
 					break;
 
 

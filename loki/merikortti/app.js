@@ -232,6 +232,164 @@ let legacyPopupTitleEl = null;
 let legacyPopupContentEl = null;
 let traficomFailureCount = 0;
 let traficomCircuitOpenUntil = 0;
+let trackEditModeEnabled = false;
+let trackEditAddPointHandler = null;
+let trackEditRemovePointHandler = null;
+let trackEditMovePointHandler = null;
+let trackEditPointSource = null;
+let trackEditPointLayer = null;
+let trackEditPointModifyInteraction = null;
+let trackEditLineSource = null;
+let trackEditLineLayer = null;
+
+function getTrackEditPointsFromSource() {
+  if (!trackEditPointSource) return [];
+
+  const features = trackEditPointSource.getFeatures().slice().sort((a, b) => {
+    const ai = Number(a.get('editOrder'));
+    const bi = Number(b.get('editOrder'));
+    if (Number.isNaN(ai) && Number.isNaN(bi)) return 0;
+    if (Number.isNaN(ai)) return 1;
+    if (Number.isNaN(bi)) return -1;
+    return ai - bi;
+  });
+
+  return features.map(feature => {
+    const geometry = feature.getGeometry();
+    const coord = geometry ? geometry.getCoordinates() : null;
+    const lonLat = coord ? toLonLat(coord, PROJECTION_CODE) : [null, null];
+    return {
+      Id: Number(feature.get('id')),
+      Source: String(feature.get('source') || 'archive'),
+      Timestamp: feature.get('timestamp') || null,
+      PathInfo: feature.get('pathInfo') || null,
+      Lon: Number(lonLat[0]),
+      Lat: Number(lonLat[1])
+    };
+  });
+}
+
+function applyTrackEditLegacyLayerAppearance() {
+  legacyKmlLayers.forEach(handle => {
+    if (!handle || !handle.layer) return;
+    if (typeof handle.layer.setVisible === 'function') {
+      handle.layer.setVisible(!trackEditModeEnabled);
+    }
+    if (typeof handle.layer.setOpacity === 'function') {
+      handle.layer.setOpacity(1);
+    }
+  });
+}
+
+function updateTrackEditPreviewLine(points) {
+  if (!trackEditLineSource) return;
+
+  trackEditLineSource.clear();
+  if (!Array.isArray(points) || points.length < 2) return;
+
+  const ordered = points.filter(point => point && isFinite(Number(point.Lon)) && isFinite(Number(point.Lat)));
+
+  if (ordered.length < 2) return;
+
+  const coordinates = ordered.map(point => fromLonLat([Number(point.Lon), Number(point.Lat)], PROJECTION_CODE));
+  const lineFeature = new Feature({
+    geometry: new LineString(coordinates)
+  });
+  trackEditLineSource.addFeature(lineFeature);
+}
+
+function ensureTrackEditPointTools() {
+  if (!map) return;
+
+  if (!trackEditPointSource) {
+    trackEditPointSource = new VectorSource();
+  }
+
+  if (!trackEditPointLayer) {
+    trackEditPointLayer = new VectorLayer({
+      source: trackEditPointSource,
+      zIndex: 85,
+      style: feature => {
+        const source = String(feature.get('source') || 'archive');
+        const pathInfo = String(feature.get('pathInfo') || '');
+
+        let fillColor = source === 'manual' ? '#22c55e' : '#f59e0b';
+        if (pathInfo === 'Start') fillColor = '#16a34a';
+        if (pathInfo === 'End') fillColor = '#dc2626';
+
+        return new Style({
+          image: new CircleStyle({
+            radius: source === 'manual' ? 5 : 4,
+            fill: new Fill({color: fillColor}),
+            stroke: new Stroke({color: '#ffffff', width: 1.5})
+          })
+        });
+      },
+      visible: false
+    });
+    map.addLayer(trackEditPointLayer);
+  }
+
+  if (trackEditPointSource && !trackEditPointSource.__trackEditPreviewBound) {
+    trackEditPointSource.on('changefeature', () => {
+      if (!trackEditModeEnabled) return;
+      updateTrackEditPreviewLine(getTrackEditPointsFromSource());
+    });
+    trackEditPointSource.on('addfeature', () => {
+      if (!trackEditModeEnabled) return;
+      updateTrackEditPreviewLine(getTrackEditPointsFromSource());
+    });
+    trackEditPointSource.on('removefeature', () => {
+      if (!trackEditModeEnabled) return;
+      updateTrackEditPreviewLine(getTrackEditPointsFromSource());
+    });
+    trackEditPointSource.__trackEditPreviewBound = true;
+  }
+
+  if (!trackEditLineSource) {
+    trackEditLineSource = new VectorSource();
+  }
+
+  if (!trackEditLineLayer) {
+    trackEditLineLayer = new VectorLayer({
+      source: trackEditLineSource,
+      zIndex: 82,
+      style: new Style({
+        stroke: new Stroke({
+          color: '#2563eb',
+          width: 4
+        })
+      }),
+      visible: false
+    });
+    map.addLayer(trackEditLineLayer);
+  }
+
+  if (!trackEditPointModifyInteraction) {
+    trackEditPointModifyInteraction = new Modify({source: trackEditPointSource});
+    trackEditPointModifyInteraction.setActive(false);
+    trackEditPointModifyInteraction.on('modifyend', event => {
+      if (!trackEditModeEnabled || typeof trackEditMovePointHandler !== 'function') return;
+
+      event.features.forEach(feature => {
+        const geometry = feature.getGeometry();
+        if (!geometry) return;
+        const coordinates = geometry.getCoordinates();
+        const lonLat = toLonLat(coordinates, PROJECTION_CODE);
+        if (!lonLat || lonLat.length < 2) return;
+
+        trackEditMovePointHandler({
+          Id: Number(feature.get('id')),
+          Source: String(feature.get('source') || 'archive'),
+          PathInfo: String(feature.get('pathInfo') || ''),
+          Lat: Number(lonLat[1]),
+          Lon: Number(lonLat[0])
+        });
+      });
+    });
+    map.addInteraction(trackEditPointModifyInteraction);
+  }
+}
 
 function isTraficomCircuitOpen() {
   return Date.now() < traficomCircuitOpenUntil;
@@ -521,7 +679,7 @@ function setRoutePlanningEnabled(enabled) {
     routeModifyInteraction.setActive(routePlanningEnabled);
   }
   if (doubleClickZoomInteraction && typeof doubleClickZoomInteraction.setActive === 'function') {
-    doubleClickZoomInteraction.setActive(!routePlanningEnabled);
+    doubleClickZoomInteraction.setActive(!routePlanningEnabled && !trackEditModeEnabled);
   }
 }
 
@@ -915,6 +1073,76 @@ function setupLegacyNavionicsBridge() {
         handle.j.visible = false;
       }
     },
+    setTrackEditMode(enabled, handlers) {
+      trackEditModeEnabled = Boolean(enabled);
+      ensureTrackEditPointTools();
+      if (typeof handlers === 'function') {
+        trackEditAddPointHandler = handlers;
+        trackEditRemovePointHandler = null;
+        trackEditMovePointHandler = null;
+      } else {
+        trackEditAddPointHandler = handlers && typeof handlers.onAdd === 'function' ? handlers.onAdd : null;
+        trackEditRemovePointHandler = handlers && typeof handlers.onRemove === 'function' ? handlers.onRemove : null;
+        trackEditMovePointHandler = handlers && typeof handlers.onMove === 'function' ? handlers.onMove : null;
+      }
+
+      if (trackEditPointLayer) {
+        trackEditPointLayer.setVisible(trackEditModeEnabled);
+      }
+
+      if (trackEditLineLayer) {
+        trackEditLineLayer.setVisible(trackEditModeEnabled);
+      }
+
+      if (trackEditPointModifyInteraction) {
+        trackEditPointModifyInteraction.setActive(trackEditModeEnabled);
+      }
+
+      if (doubleClickZoomInteraction && typeof doubleClickZoomInteraction.setActive === 'function') {
+        doubleClickZoomInteraction.setActive(!routePlanningEnabled && !trackEditModeEnabled);
+      }
+
+      if (map && typeof map.getTargetElement === 'function') {
+        const target = map.getTargetElement();
+        if (target && target.style) {
+          target.style.cursor = trackEditModeEnabled ? 'crosshair' : '';
+        }
+      }
+
+      applyTrackEditLegacyLayerAppearance();
+    },
+    isTrackEditMode() {
+      return Boolean(trackEditModeEnabled);
+    },
+    setTrackEditPoints(points) {
+      ensureTrackEditPointTools();
+      if (!trackEditPointSource) return;
+
+      trackEditPointSource.clear();
+      if (!Array.isArray(points)) return;
+
+      const features = [];
+      points.forEach((point, index) => {
+        if (!point) return;
+        if (!isFinite(Number(point.Lon)) || !isFinite(Number(point.Lat))) return;
+
+        const feature = new Feature({
+          geometry: new Point(fromLonLat([Number(point.Lon), Number(point.Lat)], PROJECTION_CODE))
+        });
+        feature.set('editOrder', index);
+        feature.set('id', Number(point.Id));
+        feature.set('source', String(point.Source || 'archive'));
+        feature.set('pathInfo', point.PathInfo || null);
+        feature.set('timestamp', point.Timestamp || null);
+        features.push(feature);
+      });
+
+      if (features.length > 0) {
+        trackEditPointSource.addFeatures(features);
+      }
+
+      updateTrackEditPreviewLine(points);
+    },
     loadKml(kmlUrl, fitPath) {
       if (!map) return null;
 
@@ -972,6 +1200,7 @@ function setupLegacyNavionicsBridge() {
     const newLayer = window.navionics.loadKml(uri, normalizedFit);
     if (newLayer) {
       legacyKmlLayers.push(newLayer);
+      applyTrackEditLegacyLayerAppearance();
     }
 
     if (typeof window.Hide === 'function') {
@@ -1462,6 +1691,46 @@ function createMap(centerLonLat, zoom) {
     })
   });
   map.getViewport().style.backgroundColor = '#ffffff';
+
+  map.on('dblclick', event => {
+    if (!trackEditModeEnabled || typeof trackEditAddPointHandler !== 'function') {
+      return;
+    }
+
+    if (routePlanningEnabled) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const lonLat = toLonLat(event.coordinate, PROJECTION_CODE);
+    if (!lonLat || lonLat.length < 2) {
+      return;
+    }
+
+    trackEditAddPointHandler(lonLat[0], lonLat[1]);
+  });
+
+  map.getViewport().addEventListener('contextmenu', event => {
+    if (!trackEditModeEnabled || typeof trackEditRemovePointHandler !== 'function') {
+      return;
+    }
+
+    if (routePlanningEnabled) {
+      return;
+    }
+
+    event.preventDefault();
+    const pixel = map.getEventPixel(event);
+    const coordinate = map.getCoordinateFromPixel(pixel);
+    const lonLat = toLonLat(coordinate, PROJECTION_CODE);
+    if (!lonLat || lonLat.length < 2) {
+      return;
+    }
+
+    trackEditRemovePointHandler(lonLat[0], lonLat[1]);
+  });
 }
 
 function createBalticBackgroundLayers() {

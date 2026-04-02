@@ -79,6 +79,8 @@ $input_places_name = '';
 $button_places_kml = '';
 $input_track_enginehours = '';
 $button_group_kml = '';
+$button_track_editmode = '';
+$buttons_track_edit_savecancel = '';
 $tracker_api_PostUrl = $tracker_apiUrl.'/init';
 
 if ($kirjautunut) {
@@ -87,11 +89,13 @@ if ($kirjautunut) {
 
 	$input_places_name = '<img id="places-name-edit" style="display:none;float:right; margin:12px;width:30px;height:30px;" src="'.$site_baseUrl.'/img/edit-white.png" /><input type="text" class="c-menu--input" style="display:none;" id="places-name-input" value="" /><img id="places-name-cancel" style="display:none;float:right; margin:10px 5px 10px 0;width:30px;height:30px;" src="'.$site_baseUrl.'/img/cancel-white.png" /><img id="places-name-save" style="display:none;float:right;margin:10px 5px 10px 0;width:30px;height:30px;" src="'.$site_baseUrl.'/img/save-white.png" />';
 
-	$button_places_kml = '<button id="places-summarykml-regen" class="c-menu--input" style="width:90%; cursor:pointer;">Generoi kaikki satamat uudelleen</button>';
+	$button_places_kml = '<button id="places-summarykml-regen" class="loki-btn">Generoi kaikki satamat uudelleen</button>';
 
 	$input_track_enginehours = '<img id="track-enginehours-edit" style="float:right; margin:10px;width:30px;height:30px;" src="'.$site_baseUrl.'/img/edit-white.png" /><input type="number" class="c-menu--input" style="display:none;" id="track-enginehours-input" value="" /placeholder="K&auml;ytt&ouml;tuntimittarin lukema" ><img id="track-enginehours-cancel" style="display:none;float:right; margin:10px 5px 10px 0;width:30px;height:30px;" src="'.$site_baseUrl.'/img/cancel-white.png" /><img id="track-enginehours-save" style="display:none;float:right;margin:10px 5px 10px 0;width:30px;height:30px;" src="'.$site_baseUrl.'/img/save-white.png" />';
 
-	$button_group_kml = '<button id="track-groupkml-regen" class="c-menu--input" style="width:90%; cursor:pointer;">Generoi reitti uudelleen</button>';
+	$button_group_kml = '<button id="track-groupkml-regen" class="loki-btn">Generoi reitti uudelleen</button>';
+	$button_track_editmode = '<button id="track-editmode-toggle" class="loki-btn">Aloita muokkaus</button>';
+	$buttons_track_edit_savecancel = '<button id="track-edit-save" class="loki-btn loki-btn--primary" style="display:none;">Tallenna muutokset</button><button id="track-edit-cancel" class="loki-btn loki-btn--danger" style="display:none;">Peruuta muutokset</button>';
 
 	$tracker_api_PostUrl = '';
 }
@@ -148,18 +152,20 @@ $output .= '<meta http-equiv="Content-Type" content="text/html; charset=utf-8" /
   <ul class="c-menu__items">
   
 	<!-- Loki (reitit) -->
-	<li class="c-menu__item track"><a id="track-tracks" class="c-menu__link"><select id="path" style="width: 100%; height: 30px;"></select></a></li>	
+	<li class="c-menu__item track"><a id="track-tracks" class="c-menu__link"><select id="path" class="loki-select"></select></a></li>	
 	<li class="c-menu__item track"><a id="track-date" class="c-menu__link"></a></li>
 	<li class="c-menu__item track"><a id="track-time" class="c-menu__link"></a></li>
 	<li class="c-menu__item track"><a id="track-duration" class="c-menu__link"></a></li>
 	<li class="c-menu__item track"><a id="track-distance" class="c-menu__link"></a></li>
 	<li class="c-menu__item track"><a id="track-speed" class="c-menu__link"></a></li>
 	<li class="c-menu__item track">'.$input_track_enginehours.'<a id="track-enginehours" class="c-menu__link"></a></li>
+	<li class="c-menu__item track">'.$button_track_editmode.'</li>
+	<li class="c-menu__item track">'.$buttons_track_edit_savecancel.'</li>
 	<li class="c-menu__item track">'.$button_group_kml.'</li>
 	<!-- <li class="c-menu__item track"><a id="track-sticky-link" class="c-menu__link"></a></li> -->
 
 	<!-- Satamat -->
-	<li class="c-menu__item places">'.$input_places_name.'<a id="places-places" class="c-menu__link"><select id="place" style="width: 80%; height: 30px;"></select></a></li>	
+	<li class="c-menu__item places">'.$input_places_name.'<a id="places-places" class="c-menu__link"><select id="place" class="loki-select"></select></a></li>	
 	<li class="c-menu__item places">'.$button_places_kml.'</li>
 	<li class="c-menu__item places desc" style="display:none;">'.$input_places_desc.'<a id="places-desc" class="c-menu__link"></a></li>
 	<li class="c-menu__item places visited" style="display:none;"><a id="places-visited" class="c-menu__link"></a></li>
@@ -167,7 +173,7 @@ $output .= '<meta http-equiv="Content-Type" content="text/html; charset=utf-8" /
 	<!-- <li class="c-menu__item places"><a id="places-sticky-link" class="c-menu__link"></a></li> -->
 
 	<!-- Tapahtumat -->
-	<li class="c-menu__item events"><a id="events-events" class="c-menu__link"><select id="events" style="width: 80%; height: 30px;"></select></a></li>	
+	<li class="c-menu__item events"><a id="events-events" class="c-menu__link"><select id="events" class="loki-select"></select></a></li>	
 	<li class="c-menu__item events datetime" style="display:none;"><a id="events-datetime" class="c-menu__link"></a></li>
 	<li class="c-menu__item events desc" style="display:none;"><a id="events-desc" class="c-menu__link"></a></li>
 	<li class="c-menu__item events amount" style="display:none;"><a id="events-amount" class="c-menu__link"></a></li>
@@ -199,6 +205,7 @@ $output .= '<meta http-equiv="Content-Type" content="text/html; charset=utf-8" /
 	var activePath = "'.$toiminnot['activePath'].'";
 	var activePlace = "'.$toiminnot['activePlace'].'";
 	var activeEvent = "'.$toiminnot['activeEvent'].'";
+	const trackerUserAuthenticated = '.($kirjautunut ? 'true' : 'false').';
 	const siteHeader = "'.$config_siteName.'";
 	const siteFolder = "'.$config_siteFolder.'";
 </script>

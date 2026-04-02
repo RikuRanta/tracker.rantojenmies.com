@@ -132,12 +132,342 @@ class Path extends Data {
 			}
 
 			$this->GenerateKml($path_Id, $imei);				
+
+			/* Luodaan seuraavan matkan KML uudelleen, jotta sen EngineHours päivittyy */
+			if (isset($filteredJson->{'EngineHourMeter'})) {
+				$nextSql = $yhteys->prepare("SELECT Id FROM Path WHERE Imei=:imei AND `Group`=0 AND Visible=1 AND EngineHourMeter IS NOT NULL AND Id > :path_Id ORDER BY Id ASC LIMIT 1");
+				$nextSql->bindParam(':imei', $imei, PDO::PARAM_STR);
+				$nextSql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+				$nextSql->execute();
+				$nextPath = $nextSql->fetch(PDO::FETCH_ASSOC);
+				if ($nextPath && !empty($nextPath['Id'])) {
+					$this->GenerateKml((int)$nextPath['Id'], $imei);
+				}
+			}
         }
         catch (PDOException $e) {
             throw new Exception($e->getMessage());
         }            
 
     }
+
+
+	public function ListManualPoints($imei, $path_Id) {
+
+		if (!is_numeric($path_Id)) {
+			throw new Exception('Provided path id is wrong type. Expecting numeric.', 400);
+		}
+
+		$yhteys = new Mysql();
+		$sql = $yhteys->prepare("SELECT mp.Id, mp.Path_Id, mp.Timestamp, mp.Lat, mp.Lon, mp.Distance, mp.Note FROM PathManualPoint mp INNER JOIN Path p ON p.Id = mp.Path_Id WHERE p.Imei=:imei AND mp.Path_Id=:path_Id AND mp.Deleted=0 ORDER BY mp.Timestamp, mp.Id;");
+		$sql->bindParam(':imei', $imei, PDO::PARAM_STR);
+		$sql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+
+		try {
+			$sql->execute();
+			$rows = $sql->fetchAll();
+			return is_array($rows) ? $rows : array();
+		}
+		catch (PDOException $e) {
+			throw new Exception($e->getMessage());
+		}
+
+	}
+
+
+	public function AddManualPoint($imei, $path_Id, $data) {
+
+		$json = json_decode($data);
+		if (!$json || !is_object($json)) {
+			throw new Exception('Invalid JSON payload', 400);
+		}
+
+		if ((!isset($json->Lat) && !isset($json->lat)) || (!isset($json->Lon) && !isset($json->lon))) {
+			throw new Exception('Lat and Lon are required', 400);
+		}
+
+		$lat = isset($json->Lat) ? $json->Lat : $json->lat;
+		$lon = isset($json->Lon) ? $json->Lon : $json->lon;
+
+		if (!is_numeric($lat) || !is_numeric($lon)) {
+			throw new Exception('Lat and Lon must be numeric', 400);
+		}
+
+		if (!is_numeric($path_Id)) {
+			if (isset($json->Path_Id) && is_numeric($json->Path_Id)) $path_Id = $json->Path_Id;
+			else if (isset($json->path_Id) && is_numeric($json->path_Id)) $path_Id = $json->path_Id;
+		}
+
+		if (!is_numeric($path_Id)) {
+			throw new Exception('Path id missing', 400);
+		}
+
+		$distance = isset($json->Distance) && is_numeric($json->Distance) ? $json->Distance : 0;
+		$note = isset($json->Note) ? (string)$json->Note : null;
+
+		$yhteys = new Mysql();
+
+		$pathSql = $yhteys->prepare("SELECT Id, Imei, Start, End FROM Path WHERE Id=:path_Id AND Imei=:imei AND `Group`=0 LIMIT 1;");
+		$pathSql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+		$pathSql->bindParam(':imei', $imei, PDO::PARAM_STR);
+
+		try {
+			$pathSql->execute();
+			$path = $pathSql->fetch(PDO::FETCH_ASSOC);
+			if (!$path) throw new Exception('Path not found', 404);
+
+			$timestamp = null;
+			if (isset($json->Timestamp) && trim((string)$json->Timestamp) !== '') {
+				$timestamp = trim((string)$json->Timestamp);
+			}
+			else {
+				$nearestSql = $yhteys->prepare("SELECT Timestamp FROM DataArchive WHERE Path_Id=:path_Id ORDER BY (POW(Lat - :lat, 2) + POW(Lon - :lon, 2)) ASC LIMIT 1;");
+				$nearestSql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+				$nearestSql->bindParam(':lat', $lat, PDO::PARAM_STR);
+				$nearestSql->bindParam(':lon', $lon, PDO::PARAM_STR);
+				$nearestSql->execute();
+				$nearest = $nearestSql->fetch(PDO::FETCH_ASSOC);
+				if ($nearest && !empty($nearest['Timestamp'])) {
+					$timestamp = $nearest['Timestamp'];
+				}
+			}
+
+			if (!$timestamp) {
+				$timestamp = !empty($path['End']) ? $path['End'] : $path['Start'];
+			}
+
+			$ins = $yhteys->prepare("INSERT PathManualPoint (Path_Id, Timestamp, Lat, Lon, Distance, Note) VALUES (:path_Id, :timestamp, :lat, :lon, :distance, :note);");
+			$ins->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+			$ins->bindParam(':timestamp', $timestamp, PDO::PARAM_STR);
+			$ins->bindParam(':lat', $lat, PDO::PARAM_STR);
+			$ins->bindParam(':lon', $lon, PDO::PARAM_STR);
+			$ins->bindParam(':distance', $distance, PDO::PARAM_STR);
+			$ins->bindParam(':note', $note, PDO::PARAM_STR);
+			$ins->execute();
+
+			$this->GenerateKml($path_Id, $imei);
+
+			return array(
+				'Id' => (int)$yhteys->lastInsertId(),
+				'Path_Id' => (int)$path_Id,
+				'Timestamp' => $timestamp,
+				'Lat' => (float)$lat,
+				'Lon' => (float)$lon
+			);
+		}
+		catch (PDOException $e) {
+			throw new Exception($e->getMessage());
+		}
+
+	}
+
+
+	public function DeleteManualPoint($imei, $path_Id, $data) {
+
+		$json = json_decode($data);
+		if (!$json || !is_object($json)) {
+			throw new Exception('Invalid JSON payload', 400);
+		}
+
+		if (!is_numeric($path_Id)) {
+			if (isset($json->Path_Id) && is_numeric($json->Path_Id)) $path_Id = $json->Path_Id;
+			else if (isset($json->path_Id) && is_numeric($json->path_Id)) $path_Id = $json->path_Id;
+		}
+
+		if (!is_numeric($path_Id)) {
+			throw new Exception('Path id missing', 400);
+		}
+
+		$manualPointId = null;
+		if (isset($json->Id) && is_numeric($json->Id)) $manualPointId = (int)$json->Id;
+		if (!$manualPointId && isset($json->id) && is_numeric($json->id)) $manualPointId = (int)$json->id;
+		if (!$manualPointId) {
+			throw new Exception('Manual point id missing', 400);
+		}
+		if ($manualPointId >= 1000000000) {
+			$manualPointId -= 1000000000;
+		}
+
+		$yhteys = new Mysql();
+
+		$pathSql = $yhteys->prepare("SELECT Id FROM Path WHERE Id=:path_Id AND Imei=:imei AND `Group`=0 LIMIT 1;");
+		$pathSql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+		$pathSql->bindParam(':imei', $imei, PDO::PARAM_STR);
+
+		try {
+			$pathSql->execute();
+			$path = $pathSql->fetch(PDO::FETCH_ASSOC);
+			if (!$path) throw new Exception('Path not found', 404);
+
+			$delSql = $yhteys->prepare("UPDATE PathManualPoint mp INNER JOIN Path p ON p.Id = mp.Path_Id SET mp.Deleted=1 WHERE mp.Id=:id AND mp.Path_Id=:path_Id AND mp.Deleted=0 AND p.Imei=:imei;");
+			$delSql->bindParam(':id', $manualPointId, PDO::PARAM_INT);
+			$delSql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+			$delSql->bindParam(':imei', $imei, PDO::PARAM_STR);
+			$delSql->execute();
+
+			if ($delSql->rowCount() === 0) {
+				throw new Exception('Manual point not found', 404);
+			}
+
+			$this->GenerateKml($path_Id, $imei);
+
+			return array('deleted' => 1, 'Id' => $manualPointId, 'Path_Id' => (int)$path_Id);
+		}
+		catch (PDOException $e) {
+			throw new Exception($e->getMessage());
+		}
+
+	}
+
+
+	public function ListEditablePoints($imei, $path_Id) {
+
+		if (!is_numeric($path_Id)) {
+			throw new Exception('Provided path id is wrong type. Expecting numeric.', 400);
+		}
+
+		$yhteys = new Mysql();
+		$sql = $yhteys->prepare("
+			SELECT ep.Id, ep.Source, ep.Timestamp, ep.Lat, ep.Lon, ep.PathInfo
+			FROM (
+				SELECT da.Id, 'archive' AS Source, da.Timestamp, da.Lat, da.Lon, da.Path_Info AS PathInfo, 0 AS SourceSort
+				FROM DataArchive da
+				INNER JOIN Path p ON p.Id = da.Path_Id
+				WHERE p.Imei=:imei
+				  AND da.Path_Id=:path_Id
+
+				UNION ALL
+
+				SELECT mp.Id AS Id, 'manual' AS Source, mp.Timestamp, mp.Lat, mp.Lon, NULL AS PathInfo, 1 AS SourceSort
+				FROM PathManualPoint mp
+				INNER JOIN Path p2 ON p2.Id = mp.Path_Id
+				WHERE p2.Imei=:imei2
+				  AND mp.Path_Id=:path_Id2
+				  AND mp.Deleted=0
+			) ep
+			ORDER BY ep.Timestamp, ep.SourceSort, ep.Id;
+		");
+		$sql->bindParam(':imei', $imei, PDO::PARAM_STR);
+		$sql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+		$sql->bindParam(':imei2', $imei, PDO::PARAM_STR);
+		$sql->bindParam(':path_Id2', $path_Id, PDO::PARAM_INT);
+
+		try {
+			$sql->execute();
+			$rows = $sql->fetchAll();
+			if (!is_array($rows)) return array();
+
+			/* Käytä samaa sääntöä kuin GenerateKml: lopeta ensimmäiseen End-merkintään */
+			$out = array();
+			foreach ($rows as $row) {
+				$out[] = $row;
+				if (isset($row['PathInfo']) && $row['PathInfo'] === 'End') {
+					break;
+				}
+			}
+
+			return $out;
+		}
+		catch (PDOException $e) {
+			throw new Exception($e->getMessage());
+		}
+
+	}
+
+
+	public function UpdateEditablePoint($imei, $path_Id, $data) {
+
+		$json = json_decode($data);
+		if (!$json || !is_object($json)) {
+			throw new Exception('Invalid JSON payload', 400);
+		}
+
+		if (!is_numeric($path_Id)) {
+			if (isset($json->Path_Id) && is_numeric($json->Path_Id)) $path_Id = $json->Path_Id;
+			else if (isset($json->path_Id) && is_numeric($json->path_Id)) $path_Id = $json->path_Id;
+		}
+
+		if (!is_numeric($path_Id)) {
+			throw new Exception('Path id missing', 400);
+		}
+
+		$pointId = null;
+		if (isset($json->Id) && is_numeric($json->Id)) $pointId = (int)$json->Id;
+		if (!$pointId && isset($json->id) && is_numeric($json->id)) $pointId = (int)$json->id;
+		if (!$pointId) {
+			throw new Exception('Point id missing', 400);
+		}
+
+		$source = isset($json->Source) ? strtolower((string)$json->Source) : (isset($json->source) ? strtolower((string)$json->source) : '');
+		if ($source !== 'archive' && $source !== 'manual') {
+			throw new Exception('Source must be archive or manual', 400);
+		}
+		if ($source === 'manual' && $pointId >= 1000000000) {
+			$pointId -= 1000000000;
+		}
+
+		$lat = isset($json->Lat) ? $json->Lat : (isset($json->lat) ? $json->lat : null);
+		$lon = isset($json->Lon) ? $json->Lon : (isset($json->lon) ? $json->lon : null);
+		if (!is_numeric($lat) || !is_numeric($lon)) {
+			throw new Exception('Lat and Lon must be numeric', 400);
+		}
+
+		$yhteys = new Mysql();
+
+		$pathSql = $yhteys->prepare("SELECT Id FROM Path WHERE Id=:path_Id AND Imei=:imei AND `Group`=0 LIMIT 1;");
+		$pathSql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+		$pathSql->bindParam(':imei', $imei, PDO::PARAM_STR);
+
+		try {
+			$pathSql->execute();
+			$path = $pathSql->fetch(PDO::FETCH_ASSOC);
+			if (!$path) throw new Exception('Path not found', 404);
+
+			if ($source === 'archive') {
+				$exists = $yhteys->prepare("SELECT da.Id FROM DataArchive da INNER JOIN Path p ON p.Id = da.Path_Id WHERE da.Id=:id AND da.Path_Id=:path_Id AND p.Imei=:imei LIMIT 1;");
+			}
+			else {
+				$exists = $yhteys->prepare("SELECT mp.Id FROM PathManualPoint mp INNER JOIN Path p ON p.Id = mp.Path_Id WHERE mp.Id=:id AND mp.Path_Id=:path_Id AND mp.Deleted=0 AND p.Imei=:imei LIMIT 1;");
+			}
+			$exists->bindParam(':id', $pointId, PDO::PARAM_INT);
+			$exists->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+			$exists->bindParam(':imei', $imei, PDO::PARAM_STR);
+			$exists->execute();
+			$pointRow = $exists->fetch(PDO::FETCH_ASSOC);
+			if (!$pointRow) {
+				throw new Exception('Point not found', 404);
+			}
+
+			if ($source === 'archive') {
+				$upd = $yhteys->prepare("UPDATE DataArchive da INNER JOIN Path p ON p.Id = da.Path_Id SET da.Lat=:lat, da.Lon=:lon WHERE da.Id=:id AND da.Path_Id=:path_Id AND p.Imei=:imei;");
+			}
+			else {
+				$upd = $yhteys->prepare("UPDATE PathManualPoint mp INNER JOIN Path p ON p.Id = mp.Path_Id SET mp.Lat=:lat, mp.Lon=:lon WHERE mp.Id=:id AND mp.Path_Id=:path_Id AND mp.Deleted=0 AND p.Imei=:imei;");
+			}
+
+			$upd->bindParam(':lat', $lat, PDO::PARAM_STR);
+			$upd->bindParam(':lon', $lon, PDO::PARAM_STR);
+			$upd->bindParam(':id', $pointId, PDO::PARAM_INT);
+			$upd->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+			$upd->bindParam(':imei', $imei, PDO::PARAM_STR);
+			$upd->execute();
+
+			$this->GenerateKml($path_Id, $imei);
+
+			return array(
+				'updated' => 1,
+				'Id' => $pointId,
+				'Source' => $source,
+				'Path_Id' => (int)$path_Id,
+				'Lat' => (float)$lat,
+				'Lon' => (float)$lon
+			);
+		}
+		catch (PDOException $e) {
+			throw new Exception($e->getMessage());
+		}
+
+	}
 
 	
     public function EndPath($imei, $timestamp) {
@@ -199,20 +529,20 @@ class Path extends Data {
 			WHERE p.Ready = 0
 				AND d.LastUpdated < DATE_ADD(NOW(),INTERVAL -10 MINUTE);
 			");
-		
-        try {
-            $sql->execute();
-			$tiedot = $sql->fetchAll();
-            return $tiedot;
-        }
-        catch (PDOException $e) {
-            throw new Exception($e->getMessage());
-        }  
 
-    }	
-	
-	
-    public function RedoKml($imei) {	
+		try {
+			$sql->execute();
+			$tiedot = $sql->fetchAll();
+			return $tiedot;
+		}
+		catch (PDOException $e) {
+			throw new Exception($e->getMessage());
+		}  
+
+	}
+
+
+	public function RedoKml($imei) {
 	
 		$paths = $this->ListPaths($imei, '', true);
 		if (is_array($paths) && count($paths) > 0) {
@@ -344,8 +674,38 @@ class Path extends Data {
 
         $yhteys = new Mysql();
 		/* Haetaan matkan pisteet kannasta */
-        $sql = $yhteys->prepare("SELECT Id, Lat, Lon, Distance, Timestamp, Path_Info FROM DataArchive WHERE Path_Id=:id ORDER BY Timestamp;");
+		$sql = $yhteys->prepare("
+			SELECT p.Id, p.Lat, p.Lon, p.Distance, p.Timestamp, p.Path_Info
+			FROM (
+				SELECT
+					da.Id AS Id,
+					da.Lat,
+					da.Lon,
+					da.Distance,
+					da.Timestamp,
+					da.Path_Info,
+					0 AS SourceSort
+				FROM DataArchive da
+				WHERE da.Path_Id=:id
+
+				UNION ALL
+
+				SELECT
+					(1000000000 + mp.Id) AS Id,
+					mp.Lat,
+					mp.Lon,
+					COALESCE(mp.Distance, 0) AS Distance,
+					mp.Timestamp,
+					NULL AS Path_Info,
+					1 AS SourceSort
+				FROM PathManualPoint mp
+				WHERE mp.Path_Id=:id2
+				  AND mp.Deleted=0
+			) p
+			ORDER BY p.Timestamp, p.SourceSort, p.Id;
+		");
         $sql->bindParam(':id', $id, PDO::PARAM_INT);
+		$sql->bindParam(':id2', $id, PDO::PARAM_INT);
 		
         try {
             $sql->execute();
@@ -363,12 +723,19 @@ class Path extends Data {
 			$endTime = null;
 			$startDate = '';
 			$lastPiste = null;
+			$previousPointForDistance = null;
 			
 			foreach ($pisteet as $piste) {
 				$lastPiste = $piste;
 				
 				$coordinates .= "{$piste['Lon']},{$piste['Lat']},0.000000 ";
-				$distance += $piste['Distance'];
+				if ($previousPointForDistance !== null) {
+					$segment = Math::CalculateGCDB($previousPointForDistance, $piste, true);
+					if (isset($segment['distance']) && is_numeric($segment['distance'])) {
+						$distance += (float)$segment['distance'];
+					}
+				}
+				$previousPointForDistance = array('Lat' => $piste['Lat'], 'Lon' => $piste['Lon']);
 
 				if ($piste['Path_Info'] == 'Start') {
 					$startPlace = $this->CheckPlace($id, $piste, $imei);
@@ -417,8 +784,8 @@ class Path extends Data {
 			$newName = isset($startPlace['Name']) && isset($endPlace['Name']) ? $startPlace['Name'].' - '.$endPlace['Name'] : 'Uusi reitti!';
 			$newNameUrl = isset($startPlace['NameUrl']) && isset($endPlace['NameUrl']) ? $startPlace['NameUrl'].'-'.$endPlace['NameUrl'] : 'uusi-reitti';
 			
-			$startPlace_Id = isset($startPlace['Id']) ? $startPlace['Id'] : NULL;
-			$endPlace_Id = isset($endPlace['Id']) ? $endPlace['Id'] : NULL;
+			$startPlace_Id = (isset($startPlace['Id']) && (int)$startPlace['Id'] > 0) ? (int)$startPlace['Id'] : NULL;
+			$endPlace_Id = (isset($endPlace['Id']) && (int)$endPlace['Id'] > 0) ? (int)$endPlace['Id'] : NULL;
 			
 			/* Määritellään reitin url */
 			$nameUrl = isset($startTime) ? date('Y', $startTime).'/'.date('n', $startTime).'/'.date('j', $startTime).'/'.$newNameUrl : '';
@@ -484,7 +851,7 @@ class Path extends Data {
 							 LIMIT 1),
 							p.EngineHourMeter
 						)
-						- (SELECT EngineHourMeter FROM Path WHERE Id < p.Id AND Imei = p.Imei AND Visible = 1 ORDER BY End DESC LIMIT 1)
+						- (SELECT EngineHourMeter FROM Path WHERE Id < p.Id AND Imei = p.Imei AND Visible = 1 AND EngineHourMeter IS NOT NULL ORDER BY End DESC LIMIT 1)
 					)
 				WHERE p.Id=:id;
 				");
@@ -502,12 +869,24 @@ class Path extends Data {
 			$sql->execute();
 
             return True;
+
+			/* Luodaan seuraavan matkan KML uudelleen, jotta sen EngineHours päivittyy tämän matkan uuden EHM-arvon mukaan */
+			if (isset($filteredJson->{'EngineHourMeter'})) {
+				$nextSql = $yhteys->prepare("SELECT Id FROM Path WHERE Imei=:imei AND `Group`=0 AND Visible=1 AND EngineHourMeter IS NOT NULL AND Id > :path_Id ORDER BY Id ASC LIMIT 1");
+				$nextSql->bindParam(':imei', $imei, PDO::PARAM_STR);
+				$nextSql->bindParam(':path_Id', $path_Id, PDO::PARAM_INT);
+				$nextSql->execute();
+				$nextPath = $nextSql->fetch(PDO::FETCH_ASSOC);
+				if ($nextPath && !empty($nextPath['Id'])) {
+					$this->GenerateKml((int)$nextPath['Id'], $imei);
+				}
+			}
         }
         catch (PDOException $e) {
             throw new Exception($e->getMessage());
-        }  
+        }            
 
-    }	
+    }
 
 	
     public function GenerateGroupKml($id, $imei) {

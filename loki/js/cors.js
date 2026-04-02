@@ -38,7 +38,12 @@ function corsRequest(url, method, headers, data, callback, errback) {
                         }
                         if (typeof(callback) == 'function') { callback(req.responseText); }
                     } else {
-                        if (typeof errback === 'function') errback(new Error('Response returned with non-OK status'));
+                        if (typeof errback === 'function') {
+                            var httpError = new Error('Response returned with non-OK status');
+                            httpError.status = req.status;
+                            httpError.responseText = req.responseText;
+                            errback(httpError);
+                        }
                     }
                 }
             };

@@ -214,8 +214,24 @@ class Data {
             return $new_Id;
             }
         catch (PDOException $e) {
-            echo $e->getMessage();
-            return 0;
+			/* Jos nimi on uniikki ja sama paikka on jo lisätty, palautetaan olemassa olevan paikan id */
+			if (isset($e->errorInfo[1]) && (int)$e->errorInfo[1] === 1062) {
+				$sqlExisting = $yhteys->prepare("SELECT Id FROM Places WHERE Name=:name LIMIT 1;");
+				$sqlExisting->bindParam(':name', $piste['Name'], PDO::PARAM_STR);
+				try {
+					$sqlExisting->execute();
+					$existing = $sqlExisting->fetch(PDO::FETCH_ASSOC);
+					if ($existing && !empty($existing['Id'])) {
+						return (int)$existing['Id'];
+					}
+				}
+				catch (PDOException $e2) {
+					echo $e2->getMessage();
+				}
+			}
+
+			echo $e->getMessage();
+			return 0;
             }            
 
     }

@@ -127,6 +127,8 @@
 		var traficomWideOverviewLayer = null;
 		var traficomDetailLayer = null;
 		var traficomExtraDetailLayer = null;
+		var trackEditModeEnabled = false;
+		var trackEditAddPointHandler = null;
 
 		// Track last applied zoom to avoid remasking during pans (only on zoom changes)
 		var lastMaskApplyZoom = -1;
@@ -638,6 +640,17 @@
 				mapInstance.removeLayer(handle.layer);
 				if (handle.j) handle.j.visible = false;
 			},
+			setTrackEditMode: function(enabled, onAddPoint) {
+				trackEditModeEnabled = !!enabled;
+				trackEditAddPointHandler = (typeof onAddPoint === 'function') ? onAddPoint : null;
+				if (mapInstance && typeof mapInstance.getTargetElement === 'function') {
+					var target = mapInstance.getTargetElement();
+					if (target && target.style) target.style.cursor = trackEditModeEnabled ? 'crosshair' : '';
+				}
+			},
+			isTrackEditMode: function() {
+				return !!trackEditModeEnabled;
+			},
 			loadKml: function(kmlUrl, fitPath) {
 				if (!mapInstance || !olModules) return null;
 				if (!kmlUrl) return null;
@@ -710,6 +723,15 @@
 				target: 'map',
 				layers: [],
 				view: mapView
+			});
+
+			mapInstance.on('dblclick', function(evt) {
+				if (!trackEditModeEnabled || !olModules || typeof trackEditAddPointHandler !== 'function') return;
+				evt.preventDefault();
+				evt.stopPropagation();
+				var lonLat = olModules.toLonLat(evt.coordinate, PROJECTION_CODE);
+				if (!lonLat || lonLat.length < 2) return;
+				trackEditAddPointHandler(lonLat[0], lonLat[1]);
 			});
 
 			var background = createBalticBackgroundLayers();

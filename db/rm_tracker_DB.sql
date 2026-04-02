@@ -170,6 +170,25 @@ CREATE TABLE IF NOT EXISTS `Path` (
 
 -- Data exporting was unselected.
 
+-- Dumping structure for table rm_tracker.PathManualPoint
+CREATE TABLE IF NOT EXISTS `PathManualPoint` (
+  `Id` int(11) NOT NULL AUTO_INCREMENT,
+  `Path_Id` int(11) NOT NULL,
+  `Timestamp` datetime NOT NULL,
+  `Lat` float(8,6) NOT NULL,
+  `Lon` float(9,6) NOT NULL,
+  `Distance` decimal(10,1) unsigned DEFAULT 0.0,
+  `Note` varchar(255) DEFAULT NULL,
+  `Deleted` tinyint(1) NOT NULL DEFAULT 0,
+  `CreatedAt` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`Id`),
+  KEY `IX_PathManualPoint_PathId_Timestamp` (`Path_Id`,`Timestamp`),
+  KEY `IX_PathManualPoint_Deleted` (`Deleted`),
+  CONSTRAINT `FK_PathManualPoint_Path_Id_Path_Id` FOREIGN KEY (`Path_Id`) REFERENCES `Path` (`Id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Data exporting was unselected.
+
 -- Dumping structure for table rm_tracker.Places
 CREATE TABLE IF NOT EXISTS `Places` (
   `Id` int(11) NOT NULL AUTO_INCREMENT,
