@@ -5,17 +5,19 @@ declare(strict_types=1);
 const DEFAULT_MAX_BYTES = 16384;
 
 $defaultRoot = __DIR__ . '/tile-cache';
-$options = getopt('', ['delete', 'root:', 'max-bytes:', 'help']);
+$options = getopt('', ['delete', 'mark-ok', 'root:', 'max-bytes:', 'help']);
 
 if (isset($options['help'])) {
-	echo "Usage: php CleanupFaultyTiles.php [--delete] [--root=/path/to/tile-cache] [--max-bytes=16384]\n";
+	echo "Usage: php CleanupFaultyTiles.php [--delete] [--mark-ok] [--root=/path/to/tile-cache] [--max-bytes=16384]\n";
 	echo "\n";
 	echo "Without --delete, the script runs in dry-run mode and only prints suspicious tiles.\n";
+	echo "With --mark-ok, validated non-suspicious tiles get a .ok sidecar marker if missing.\n";
 	echo "Only PNG files up to --max-bytes are inspected. Larger files are skipped before GD decoding.\n";
 	exit(0);
 }
 
 $deleteMode = isset($options['delete']);
+$markOkMode = isset($options['mark-ok']);
 $root = isset($options['root']) ? (string)$options['root'] : $defaultRoot;
 $maxBytes = isset($options['max-bytes']) ? (int)$options['max-bytes'] : DEFAULT_MAX_BYTES;
 
@@ -129,6 +131,26 @@ function shouldInspectTile(string $path, int $maxBytes): bool {
 	return $fileSize <= $maxBytes;
 }
 
+function ensureOkMarker(string $tilePath): bool {
+	$okPath = $tilePath . '.ok';
+	if (is_file($okPath)) {
+		return true;
+	}
+
+	$tmpPath = $okPath . '.tmp.' . getmypid();
+	if (@file_put_contents($tmpPath, "ok\n") === false) {
+		@unlink($tmpPath);
+		return @touch($okPath);
+	}
+
+	if (!@rename($tmpPath, $okPath)) {
+		@unlink($tmpPath);
+		return @touch($okPath);
+	}
+
+	return true;
+}
+
 $iterator = new RecursiveIteratorIterator(
 	new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
 );
@@ -138,6 +160,8 @@ $inspected = 0;
 $skippedBySize = 0;
 $flagged = 0;
 $deleted = 0;
+$markedOk = 0;
+$markFailed = 0;
 
 foreach ($iterator as $fileInfo) {
 	if (!$fileInfo->isFile()) {
@@ -159,6 +183,18 @@ foreach ($iterator as $fileInfo) {
 	$inspected++;
 
 	if (!isSuspiciousTile($path)) {
+		if ($markOkMode) {
+			$okPath = $path . '.ok';
+			if (!is_file($okPath)) {
+				if (ensureOkMarker($path)) {
+					echo "marked {$okPath}\n";
+					$markedOk++;
+				} else {
+					echo "mark-failed {$okPath}\n";
+					$markFailed++;
+				}
+			}
+		}
 		continue;
 	}
 
@@ -167,6 +203,7 @@ foreach ($iterator as $fileInfo) {
 		if (@unlink($path)) {
 			echo "deleted {$path}\n";
 			$deleted++;
+			@unlink($path . '.ok');
 		} else {
 			echo "failed {$path}\n";
 		}
@@ -175,4 +212,15 @@ foreach ($iterator as $fileInfo) {
 	}
 }
 
-echo "checked={$checked} inspected={$inspected} skipped_by_size={$skippedBySize} flagged={$flagged} deleted={$deleted} max_bytes={$maxBytes} mode=" . ($deleteMode ? 'delete' : 'dry-run') . "\n";
+$modes = [];
+if ($deleteMode) {
+	$modes[] = 'delete';
+}
+if ($markOkMode) {
+	$modes[] = 'mark-ok';
+}
+if (empty($modes)) {
+	$modes[] = 'dry-run';
+}
+
+echo "checked={$checked} inspected={$inspected} skipped_by_size={$skippedBySize} flagged={$flagged} deleted={$deleted} marked_ok={$markedOk} mark_failed={$markFailed} max_bytes={$maxBytes} mode=" . implode('+', $modes) . "\n";

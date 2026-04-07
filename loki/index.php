@@ -213,7 +213,6 @@ $output .= '<meta http-equiv="Content-Type" content="text/html; charset=utf-8" /
 <script type="text/javascript" src="'.$site_baseUrl.'/js/initMap.js"></script>
 <script type="text/javascript" src="'.$site_baseUrl.'/merikortti/masks-data.js"></script>
 <script type="text/javascript">
-	var tileProxyUrl = "/'.$config_siteFolder.'/merikortti/TileProxy.php";
 	var callback = '.$toiminnot['callback'].'; 
 	var url = "'.$toiminnot['apiUrl'].'";
 	var apiUrl = "'.$tracker_apiUrl.'";

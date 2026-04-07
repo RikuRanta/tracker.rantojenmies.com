@@ -5,6 +5,7 @@
 log/*.log
 
 # Cached tiles (production data)
+loki/merikortti/tile-cache/*
 loki/merikortti/tile-cache/**/*.png
 loki/merikortti/tile-cache/**/*.jpg
 loki/merikortti/tile-cache/**/*.jpeg

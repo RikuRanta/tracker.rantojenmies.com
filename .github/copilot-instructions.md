@@ -56,3 +56,17 @@
 - Tracker socket protocol expectations in `server_v3.php`:
   - Device handshake starting with `##` => respond `LOAD`
   - Position frames starting with `imei` => parse and respond `ON`
+
+## Merikortti tile pipeline (authoritative)
+- **Single supported flow**:
+  1) UI requests `loki/merikortti/tile-cache/<layer>/<z>/<x>/<y>.png`.
+  2) Apache serves file directly when it exists.
+  3) On cache miss, Apache rewrite in `loki/merikortti/tile-cache/.htaccess` routes to `loki/merikortti/TileProxy.php`.
+  4) `TileProxy.php` fetches WMTS tile from Traficom, saves to disk cache, then returns it.
+- Treat all alternate/legacy tile paths as obsolete (`/tiles/...` route, direct frontend TileProxy calls, extra proxy modes).
+- Keep `TileProxy.php` minimal: validate params, cache-hit serve, cache-miss fetch+save+serve.
+- Do not add runtime image quality heuristics in `TileProxy.php` that can block cache writes.
+- Keep Traficom layer slug mapping stable between frontend and `TileProxy.php`:
+  - `traficom_yleiskartat_250k_public`
+  - `traficom_merikarttasarjat_public`
+  - `traficom_rannikkokartat_public`

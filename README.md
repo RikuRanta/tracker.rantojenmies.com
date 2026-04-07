@@ -102,6 +102,28 @@ Override with environment variables:
 - `TRACKER_PHP_BIN`
 - `TRACKER_PROCESS_PHP`
 
+## Tile cache prewarm (offline)
+
+Use the simple scraper to reduce first-user tile misses without adding request-path latency.
+
+Simplest option (no auth/redirect tuning):
+
+```bash
+php loki/merikortti/SimpleTileScraper.php
+```
+
+Optional custom range:
+
+```bash
+php loki/merikortti/SimpleTileScraper.php --layer=traficom_yleiskartat_100k_public --min-zoom=10 --max-zoom=10
+```
+
+Example cron (nightly at 02:25):
+
+```cron
+25 2 * * * /usr/bin/php /var/www/tracker.rantojenmies.com/loki/merikortti/SimpleTileScraper.php >> /var/log/tracker-tile-prefetch.log 2>&1
+```
+
 ## API quick start
 
 Entry point:

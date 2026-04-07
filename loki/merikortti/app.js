@@ -28,8 +28,28 @@ const {Circle: CircleStyle, Fill, Stroke, Style} = styleModule;
 const {defaults: defaultControls, ScaleLine} = controlModule;
 const {getDistance: getGeodesicDistance} = sphereModule;
 const {fromLonLat, toLonLat, get: getProjection, transformExtent} = projModule;
-const TILE_PROXY_URL = new URL('./TileProxy.php', import.meta.url).pathname;
-const TILE_PATH_BASE = new URL('./tiles/', import.meta.url).pathname;
+const TILE_PATH_BASE = new URL('./tile-cache/', import.meta.url).pathname;
+
+function buildTileCacheUrl(layerSlug, z, col, row) {
+  return `${TILE_PATH_BASE}${layerSlug}/${z}/${col}/${row}.png`;
+}
+
+function setImageSrcWithFallback(image, src) {
+  if (!image) {
+    return;
+  }
+  image.onerror = null;
+  image.src = src;
+}
+
+function fetchTileBlobWithFallback(src) {
+  return fetch(src).then(response => {
+    if (!response.ok) {
+      throw new Error(`Tile fetch failed: HTTP ${response.status}`);
+    }
+    return response.blob();
+  });
+}
 
 function sanitizeLayerName(name) {
   return name.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
@@ -46,13 +66,25 @@ const legacyMode = !statusEl;
 const CAPABILITIES_TTL_MS = 30 * 60 * 1000;
 const PROJECTION_CODE = 'EPSG:3857';
 const TRAFICOM_MIN_ZOOM = 9;
-const TRAFICOM_DETAIL_MIN_ZOOM = 12;
+const TRAFICOM_DETAIL_MIN_ZOOM = 12;      // merikarttasarjat: z12+
 const TRAFICOM_EXTRA_DETAIL_MIN_ZOOM = 14;
+const TRAFICOM_WIDE_OVERVIEW_MAX_ZOOM = 12;
+const TRAFICOM_DETAIL_MAX_ZOOM = 13;      // merikarttasarjat: z12-13 only
+const TRAFICOM_EXTRA_DETAIL_MAX_ZOOM = 15; // rannikkokartat: z14-15
+const TRAFICOM_LAYER_SLUGS = {
+  WIDE_OVERVIEW_250K: 'traficom_yleiskartat_250k_public',
+  DETAIL_SERIES: 'traficom_merikarttasarjat_public',
+  EXTRA_DETAIL_COASTAL: 'traficom_rannikkokartat_public'
+};
+const TRAFICOM_LAYER_NAMES = {
+  traficom_yleiskartat_250k_public: 'Traficom:Yleiskartat 250k public',
+  traficom_merikarttasarjat_public: 'Traficom:Merikarttasarjat public',
+  traficom_rannikkokartat_public: 'Traficom:Rannikkokartat public'
+};
 const FALLBACK_CENTER = [22.245, 60.153];
 const FALLBACK_ZOOM = 8;
 const ENABLE_TILE_PROXY_DEBUG = true;
 const ENABLE_TRAFFICOM_MASKS = true;
-const FORCE_PROXY_XYZ_FALLBACK = false;
 const KEEP_BASEMAP_VISIBLE_DURING_OUTAGE = false;
 const TRAFICOM_FAILURE_THRESHOLD = 8;
 const TRAFICOM_COOLDOWN_MS = 120000;
@@ -1785,20 +1817,21 @@ function isInsideArea(lon, lat, bboxLonLat) {
 
 function setupAdaptiveBackgrounds(background, onCountryProviderChange) {
   const {topoBase, countryLayers} = background;
+  const view = map.getView();
 
   const updateBackgrounds = () => {
-    const center = map.getView().getCenter();
+    const center = view.getCenter();
     if (!center) {
       return;
     }
 
     const [lon, lat] = toLonLat(center, PROJECTION_CODE);
-    const zoom = map.getView().getZoom() ?? 0;
+    const zoom = view.getZoom() ?? 0;
     const showBaseOnly = zoom < TRAFICOM_MIN_ZOOM;
     const showCountryFallback = zoom >= TRAFICOM_MIN_ZOOM;
     const activeProvider = COUNTRY_PROVIDERS.find(provider => isInsideArea(lon, lat, provider.bboxLonLat)) || null;
 
-    topoBase.setVisible(KEEP_BASEMAP_VISIBLE_DURING_OUTAGE || showBaseOnly);
+    topoBase.setVisible(KEEP_BASEMAP_VISIBLE_DURING_OUTAGE || showBaseOnly || isTraficomCircuitOpen());
     topoBase.setOpacity(showBaseOnly ? 1 : 0.95);
     
     // Only show country layers if user is within their geographic bounds.
@@ -1823,17 +1856,20 @@ function setupAdaptiveBackgrounds(background, onCountryProviderChange) {
   const zoomEl = document.getElementById('zoomIndicator');
   function updateZoomIndicator() {
     if (zoomEl) {
-      const z = map.getView().getZoom();
+      const z = view.getZoom();
       zoomEl.textContent = z != null ? `z ${z.toFixed(2)}` : 'z –';
     }
   }
 
-  updateBackgrounds();
-  updateZoomIndicator();
-  map.on('moveend', () => {
+  function refreshAdaptiveLayers() {
     updateBackgrounds();
     updateZoomIndicator();
-  });
+  }
+
+  refreshAdaptiveLayers();
+  map.on('moveend', refreshAdaptiveLayers);
+  view.on('change:resolution', refreshAdaptiveLayers);
+  view.on('change:center', refreshAdaptiveLayers);
 }
 
 function attachTileErrorFallback(layer, background) {
@@ -2003,48 +2039,18 @@ function createWmtsLayer(capabilities, layerName, zIndex, provider) {
   source.setTileUrlFunction(function(tileCoord, pixelRatio, projection) {
     const url = originalUrlFn(tileCoord, pixelRatio, projection);
     if (!url) return url;
-    // Parse WMTS params from the original URL to build path-based tile URL
+    // UI always requests tile-cache URLs.
+    // Apache serves cache hits directly and rewrites cache misses to TileProxy.php.
     try {
       const parsed = new URL(url);
       const z = (parsed.searchParams.get('TILEMATRIX') || parsed.searchParams.get('TileMatrix') || '').split(':').pop();
       const col = parsed.searchParams.get('TILECOL') || parsed.searchParams.get('TileCol');
       const row = parsed.searchParams.get('TILEROW') || parsed.searchParams.get('TileRow');
       if (z && col && row) {
-        return `${TILE_PATH_BASE}${sanitizedName}/${z}/${col}/${row}.png`;
+        return buildTileCacheUrl(sanitizedName, z, col, row);
       }
     } catch {}
-    // Fallback to query-param mode if URL parsing fails
-    const debugParam = ENABLE_TILE_PROXY_DEBUG ? '&debug=1' : '';
-    return TILE_PROXY_URL + '?url=' + encodeURIComponent(url) + debugParam;
-  });
-
-  return new TileLayer({
-    source,
-    zIndex
-  });
-}
-
-function createTraficomProxyXyzLayer(layerName, zIndex) {
-  const sanitizedName = sanitizeLayerName(layerName);
-  const source = new XYZ({
-    crossOrigin: 'anonymous',
-    maxZoom: 18,
-    wrapX: false,
-    tileUrlFunction(tileCoord) {
-      if (!tileCoord || tileCoord.length < 3) {
-        return undefined;
-      }
-
-      const z = tileCoord[0];
-      const x = tileCoord[1];
-      // OpenLayers XYZ source uses negative-Y convention: tileCoord[2] = -row - 1
-      const y = tileCoord[2] < 0 ? -tileCoord[2] - 1 : tileCoord[2];
-      if (x < 0 || z < 0) {
-        return undefined;
-      }
-
-      return `${TILE_PATH_BASE}${sanitizedName}/${z}/${x}/${y}.png`;
-    }
+    return url;
   });
 
   return new TileLayer({
@@ -2075,7 +2081,8 @@ function setUnmaskedTileLoad(source) {
     return;
   }
   source.setTileLoadFunction((tile, src) => {
-    tile.getImage().src = src;
+    const image = tile.getImage();
+    setImageSrcWithFallback(image, src);
   });
 }
 
@@ -2267,7 +2274,7 @@ function applyPolygonMask(layers, wgs84PolygonData) {
 
             const maybeIntersectsMask = polygonBounds.some(bounds => extentsIntersect(tileExtent, bounds));
             if (!maybeIntersectsMask) {
-              image.src = src;
+              setImageSrcWithFallback(image, src);
               return;
             }
 
@@ -2282,18 +2289,12 @@ function applyPolygonMask(layers, wgs84PolygonData) {
 
             // Fast path for clearly outside tiles.
             if (tileClass === 'outside') {
-              image.src = src;
+              setImageSrcWithFallback(image, src);
               return;
             }
 
             // Boundary tile: apply pixel-accurate masking so polygon edges are correct.
-            fetch(src)
-              .then(response => {
-                if (!response.ok) {
-                  throw new Error(`Tile fetch failed: HTTP ${response.status}`);
-                }
-                return response.blob();
-              })
+            fetchTileBlobWithFallback(src)
               .then(blob => createImageBitmap(blob))
               .then(bitmap => {
                 const canvas = document.createElement('canvas');
@@ -2301,7 +2302,7 @@ function applyPolygonMask(layers, wgs84PolygonData) {
                 canvas.height = bitmap.height;
                 const ctx = canvas.getContext('2d', {willReadFrequently: true});
                 if (!ctx) {
-                  image.src = src;
+                  setImageSrcWithFallback(image, src);
                   return;
                 }
 
@@ -2311,7 +2312,7 @@ function applyPolygonMask(layers, wgs84PolygonData) {
                 try {
                   imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 } catch {
-                  image.src = src;
+                  setImageSrcWithFallback(image, src);
                   return;
                 }
 
@@ -2340,11 +2341,11 @@ function applyPolygonMask(layers, wgs84PolygonData) {
                   ctx.putImageData(imageData, 0, 0);
                   image.src = canvas.toDataURL('image/png');
                 } else {
-                  image.src = src;
+                  setImageSrcWithFallback(image, src);
                 }
               })
               .catch(() => {
-                image.src = src;
+                setImageSrcWithFallback(image, src);
               });
             return;
           }
@@ -2352,7 +2353,7 @@ function applyPolygonMask(layers, wgs84PolygonData) {
           console.debug('Tile filtering error:', e);
         }
         
-        image.src = src;
+        setImageSrcWithFallback(image, src);
       });
     }
   });
@@ -2386,47 +2387,38 @@ async function start() {
 
     setStatus('Ladataan merikarttaa...');
     const provider = PROVIDERS.traficom;
+    const wideOverviewLayer = TRAFICOM_LAYER_SLUGS.WIDE_OVERVIEW_250K;
+    const detailLayer = TRAFICOM_LAYER_SLUGS.DETAIL_SERIES;
+    const extraDetailLayer = TRAFICOM_LAYER_SLUGS.EXTRA_DETAIL_COASTAL;
     let capabilities = null;
-    let detailLayer = 'Traficom:Merikarttasarjat public';
-    let extraDetailLayer = null;
-    let wideOverviewLayer = null;
     let fromCache = false;
-    let useProxyXyzFallback = FORCE_PROXY_XYZ_FALLBACK;
 
-    if (!useProxyXyzFallback) {
-      try {
-        const loaded = await loadCapabilities(provider);
-        capabilities = loaded.capabilities;
-        detailLayer = loaded.detailLayer;
-        extraDetailLayer = loaded.extraDetailLayer;
-        wideOverviewLayer = loaded.wideOverviewLayer;
-        fromCache = loaded.fromCache;
-
-        const traficomExtent = transformExtent(
-          provider.approxCoverageBboxLonLat,
-          'EPSG:4326',
-          PROJECTION_CODE
-        );
-        if (wideOverviewLayer) {
-          traficomWideOverviewLayer = createWmtsLayer(capabilities, wideOverviewLayer, 0, provider);
-          traficomWideOverviewLayer.setExtent(traficomExtent);
-          traficomWideOverviewLayer.setVisible(false);
-          map.addLayer(traficomWideOverviewLayer);
-        }
-      } catch {
-        useProxyXyzFallback = true;
-        setStatus('Capabilities-haku epäonnistui, käytetään fallback-tilaa.');
-      }
+    try {
+      const loaded = await loadCapabilities(provider);
+      capabilities = loaded.capabilities;
+      fromCache = loaded.fromCache;
+    } catch (err) {
+      throw new Error(`Traficom WMTS capabilities ei lataudu: ${(err && err.message) ? err.message : String(err)}`);
     }
+
+    const traficomExtent = transformExtent(
+      provider.approxCoverageBboxLonLat,
+      'EPSG:4326',
+      PROJECTION_CODE
+    );
+
+    traficomWideOverviewLayer = createWmtsLayer(capabilities, TRAFICOM_LAYER_NAMES[wideOverviewLayer], 0, provider);
+    traficomWideOverviewLayer.setExtent(traficomExtent);
+    traficomWideOverviewLayer.setVisible(false);
+    map.addLayer(traficomWideOverviewLayer);
+    attachTileErrorFallback(traficomWideOverviewLayer, background);
 
     function ensureTraficomDetailLayer() {
       if (traficomDetailLayer) {
         return traficomDetailLayer;
       }
 
-      traficomDetailLayer = useProxyXyzFallback
-        ? createTraficomProxyXyzLayer(detailLayer, 10)
-        : createWmtsLayer(capabilities, detailLayer, 10, provider);
+      traficomDetailLayer = createWmtsLayer(capabilities, TRAFICOM_LAYER_NAMES[detailLayer], 10, provider);
       traficomDetailLayer.setVisible(false);
       map.addLayer(traficomDetailLayer);
       attachTileErrorFallback(traficomDetailLayer, background);
@@ -2435,17 +2427,11 @@ async function start() {
     }
 
     function ensureTraficomExtraDetailLayer() {
-      if (!extraDetailLayer) {
-        return null;
-      }
-
       if (traficomExtraDetailLayer) {
         return traficomExtraDetailLayer;
       }
 
-      traficomExtraDetailLayer = useProxyXyzFallback
-        ? createTraficomProxyXyzLayer(extraDetailLayer, 20)
-        : createWmtsLayer(capabilities, extraDetailLayer, 20, provider);
+      traficomExtraDetailLayer = createWmtsLayer(capabilities, TRAFICOM_LAYER_NAMES[extraDetailLayer], 20, provider);
       traficomExtraDetailLayer.setVisible(false);
       map.addLayer(traficomExtraDetailLayer);
       attachTileErrorFallback(traficomExtraDetailLayer, background);
@@ -2455,6 +2441,7 @@ async function start() {
 
     const adaptTraficomLayersForCountry = (countryId, zoom) => {
       const currentZoom = zoom ?? 0;
+      const zoomLevel = Math.floor(currentZoom);
       if (isTraficomCircuitOpen()) {
         if (traficomWideOverviewLayer) {
           traficomWideOverviewLayer.setVisible(false);
@@ -2469,9 +2456,11 @@ async function start() {
       }
 
       const hasWideOverviewLayer = Boolean(traficomWideOverviewLayer);
-      const showOverview = hasWideOverviewLayer && currentZoom >= TRAFICOM_MIN_ZOOM;
-      const showDetail = hasWideOverviewLayer ? currentZoom >= TRAFICOM_DETAIL_MIN_ZOOM : currentZoom >= TRAFICOM_MIN_ZOOM;
-      const showExtraDetail = Boolean(extraDetailLayer) && currentZoom >= TRAFICOM_EXTRA_DETAIL_MIN_ZOOM;
+      const showOverview = hasWideOverviewLayer
+        && zoomLevel >= TRAFICOM_MIN_ZOOM
+        && zoomLevel <= TRAFICOM_WIDE_OVERVIEW_MAX_ZOOM;
+      const showDetail = zoomLevel >= TRAFICOM_DETAIL_MIN_ZOOM && zoomLevel <= TRAFICOM_DETAIL_MAX_ZOOM;
+      const showExtraDetail = zoomLevel >= TRAFICOM_EXTRA_DETAIL_MIN_ZOOM && zoomLevel <= TRAFICOM_EXTRA_DETAIL_MAX_ZOOM;
 
       if (traficomWideOverviewLayer) {
         traficomWideOverviewLayer.setVisible(showOverview);
@@ -2500,14 +2489,12 @@ async function start() {
     applyCurrentMasksToTraficom();
 
     const sourceInfo = 'oletussijainnista';
-    const cacheInfo = useProxyXyzFallback ? 'proxy xyz fallback' : (fromCache ? 'capabilities cache' : 'capabilities verkosta');
+    const cacheInfo = fromCache ? 'tile proxy + disk cache' : 'tile proxy';
     const [lon, lat] = toLonLat(map.getView().getCenter(), PROJECTION_CODE);
     const activeCountry = COUNTRY_PROVIDERS.find(provider => isInsideArea(lon, lat, provider.bboxLonLat));
     const areaInfo = activeCountry ? `alueprovider ${activeCountry.label}` : 'alueprovider globaali';
-    const extraLayerInfo = extraDetailLayer
-      ? ` -> ${extraDetailLayer} @ z${TRAFICOM_EXTRA_DETAIL_MIN_ZOOM}+`
-      : '';
-    const layerInfo = `${wideOverviewLayer || 'ei yleiskarttaa'} @ z${TRAFICOM_MIN_ZOOM}+ -> ${detailLayer} @ z${TRAFICOM_DETAIL_MIN_ZOOM}+${extraLayerInfo}`;
+    const extraLayerInfo = ` -> ${extraDetailLayer} @ z${TRAFICOM_EXTRA_DETAIL_MIN_ZOOM}+`;
+    const layerInfo = `${wideOverviewLayer} @ z${TRAFICOM_MIN_ZOOM}-${TRAFICOM_WIDE_OVERVIEW_MAX_ZOOM} -> ${detailLayer} @ z${TRAFICOM_DETAIL_MIN_ZOOM}+${extraLayerInfo}`;
     setStatus(`Kartta valmis (${sourceInfo}, ${layerInfo}, ${areaInfo}, ${cacheInfo})`);
     hideStatusAfterDelay();
 
